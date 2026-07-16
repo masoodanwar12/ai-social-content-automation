@@ -56,4 +56,4 @@ Recommended fix going forward: move the Kie.ai auth into a proper n8n **HTTP Hea
 
 ## License
 
-Add a license of your choice if you plan to make this repo public (MIT is a common default for personal projects).
+MIT License
