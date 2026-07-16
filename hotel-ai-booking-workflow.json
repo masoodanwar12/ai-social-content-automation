@@ -1,0 +1,924 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "allowFileUploads": true
+        }
+      },
+      "id": "b4f7e6dd-1144-4dd8-bb4a-ce9bbfb683b6",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1120,
+        656
+      ],
+      "webhookId": "dc43a6a1-dc7a-4a61-90bf-2ca92abafe29"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond_has_file",
+              "leftValue": "={{ $json.files ? $json.files.length : 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "432f24f3-74ce-41ed-94b6-aa88066b658d",
+      "name": "Has Receipt Image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        656
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Detect image format and build correct base64 data URL\nconst item = $input.first();\nconst binaryData = $('Convert Image to Base').first().binary;\n\n// Try to get mime type from binary\nlet mimeType = 'image/jpeg'; // default\nif (binaryData && binaryData.data0) {\n  const bMime = binaryData.data0.mimeType || '';\n  if (bMime.includes('png')) mimeType = 'image/png';\n  else if (bMime.includes('webp')) mimeType = 'image/webp';\n  else if (bMime.includes('gif')) mimeType = 'image/gif';\n  else if (bMime.includes('jpeg') || bMime.includes('jpg')) mimeType = 'image/jpeg';\n  else if (bMime) mimeType = bMime;\n}\n\nreturn [{\n  json: {\n    ...item.json,\n    detectedMimeType: mimeType,\n    imageDataUrl: `data:${mimeType};base64,${item.json.imageBase64}`\n  }\n}];"
+      },
+      "id": "5f65c7b7-8565-43de-9dad-7e3d944145f8",
+      "name": "Detect Image Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"meta-llama/llama-4-scout-17b-16e-instruct\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"You are a strict payment verification assistant. The EXACT expected payment amount is: {{ $json.expectedPrice }}.\\n\\nAnalyze this image carefully and answer:\\n1) Is this a legitimate payment receipt or transaction screenshot? (bank transfer, mobile payment, card payment, PayPal, etc.)\\n2) What is the EXACT amount shown in the image?\\n3) Does the amount in the image EXACTLY match {{ $json.expectedPrice }}? Even 1 unit difference = NOT a match. Be very strict.\\n\\nAccept any format: PNG, JPG, WEBP, screenshot, photo of receipt, mobile app screenshot, bank statement screenshot.\\n\\nRespond ONLY with valid JSON, no extra text, no markdown:\\n{\\\"is_receipt\\\": true or false, \\\"amount_matches\\\": true or false, \\\"extracted_amount\\\": \\\"exact amount you see as string\\\", \\\"reason\\\": \\\"brief explanation\\\"}\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"{{ $json.imageDataUrl }}\"\n          }\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "2a1fd5b8-024f-4bf3-9e26-de3b6c2a2bde",
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        592,
+        512
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0TM5GixdDAYdmOg5",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $input.item.json.choices?.[0]?.message?.content || '';\n\n// Carry forward guest info from Extract Price node\nlet extractNode;\ntry {\n  extractNode = $('Extract Price from Sheet').first().json;\n} catch(e) {\n  try {\n    extractNode = $('Extract Price from Sheet').first().json;\n  } catch(e2) {\n    throw new Error('Cannot find Extract Price node!');\n  }\n}\n\n// Get binary — try multiple source nodes\nlet receiptBinary = null;\nlet binaryKeyName = 'data0';\n\ntry {\n  const hasReceiptNode = $('Has Receipt Image?').first();\n  if (hasReceiptNode.binary && Object.keys(hasReceiptNode.binary).length > 0) {\n    binaryKeyName = Object.keys(hasReceiptNode.binary)[0];\n    receiptBinary = hasReceiptNode.binary[binaryKeyName];\n  }\n} catch(e) {}\n\nif (!receiptBinary) {\n  try {\n    const binaryItem = $('Convert Image to Base').first();\n    if (binaryItem.binary && Object.keys(binaryItem.binary).length > 0) {\n      binaryKeyName = Object.keys(binaryItem.binary)[0];\n      receiptBinary = binaryItem.binary[binaryKeyName];\n    }\n  } catch(e) {}\n}\n\nif (!receiptBinary) {\n  try {\n    const binaryItem = $('Convert Image to Base').first();\n    if (binaryItem.binary && Object.keys(binaryItem.binary).length > 0) {\n      binaryKeyName = Object.keys(binaryItem.binary)[0];\n      receiptBinary = binaryItem.binary[binaryKeyName];\n    }\n  } catch(e) {}\n}\n\nlet result;\ntry {\n  const cleaned = message.replace(/```json|```/g, '').trim();\n  result = JSON.parse(cleaned);\n} catch (e) {\n  const errorItem = {\n    json: {\n      verified: false,\n      is_receipt: false,\n      amount_matches: false,\n      extracted_amount: '0',\n      reason: 'Could not parse vision model response: ' + message,\n      guestName: extractNode.guestName,\n      guestEmail: extractNode.guestEmail,\n      roomType: extractNode.roomType,\n      expectedPrice: extractNode.expectedPrice,\n      sessionId: extractNode.sessionId,\n      imageBase64: extractNode.imageBase64,\n      binaryKeyName\n    },\n    binary: receiptBinary ? { [binaryKeyName]: receiptBinary } : {}\n  };\n  return [errorItem];\n}\n\n// STRICT math comparison\nconst extractedNum = parseFloat((result.extracted_amount || '0').replace(/[^0-9.]/g, ''));\nconst expectedNum = parseFloat(extractNode.expectedPrice);\nconst strictMatch = !isNaN(extractedNum) && !isNaN(expectedNum) && Math.abs(extractedNum - expectedNum) < 0.01;\n\nconst verified = result.is_receipt === true && strictMatch;\n\nconst outputItem = {\n  json: {\n    verified,\n    is_receipt: result.is_receipt,\n    amount_matches: strictMatch,\n    extracted_amount: result.extracted_amount,\n    reason: result.reason,\n    guestName: extractNode.guestName,\n    guestEmail: extractNode.guestEmail,\n    roomType: extractNode.roomType,\n    expectedPrice: extractNode.expectedPrice,\n    sessionId: extractNode.sessionId,\n    imageBase64: extractNode.imageBase64,\n    binaryKeyName\n  },\n  binary: receiptBinary ? { [binaryKeyName]: receiptBinary } : {}\n};\n\nreturn [outputItem];"
+      },
+      "id": "7f24b2af-a9b0-4674-9df1-9d055a4d2127",
+      "name": "Parse Vision Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond_verified",
+              "leftValue": "={{ $json.verified }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3e02f6d7-8709-4f52-a94f-e1a3d43e8ee6",
+      "name": "Payment Verified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "set_notverified_1",
+              "name": "output",
+              "type": "string",
+              "value": "==⚠️ Payment mismatch detected! Your room price is €{{ $('Parse Vision Response').item.json.expectedPrice }} but your receipt shows €{{ $('Parse Vision Response').item.json.extracted_amount }}. Please upload the correct receipt or contact our support team."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b9c442ed-e155-4c77-a4e4-17c565594eab",
+      "name": "Not Verified Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1488,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {}
+      },
+      "id": "86bead39-0509-4c1a-bf20-0cc5adfff345",
+      "name": "OpenAI Chat Model2",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -672,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sessionId = $('Parse Your YES or NO Reply').first().json.sessionId;\nconst isYes = $('Parse Your YES or NO Reply').first().json.isYes;\nconst sheetRows = $input.all();\n\nlet matchedRow = null;\nfor (const row of sheetRows) {\n  // Try both 'session id' (lowercase) and 'Session ID' (capitals)\n  const rowSession = (\n    row.json['session id'] || \n    row.json['Session ID'] || \n    row.json['sessionId'] || \n    ''\n  ).toString().trim();\n  \n  if (rowSession === sessionId) {\n    matchedRow = row.json;\n    break;\n  }\n}\n\nif (!matchedRow) {\n  return [{ json: { error: 'No booking found for this session', sessionId } }];\n}\n\n// Normalize all field names to handle spaces and casing\nconst guestName = (\n  matchedRow['Guest Name'] || \n  matchedRow['Guest Name '] || \n  ''\n).toString().trim();\n\nconst guestEmail = (\n  matchedRow['Guest Email'] || \n  matchedRow['Guest Email '] || \n  ''\n).toString().trim();\n\nconst roomType = (\n  matchedRow['Standard Room'] || \n  matchedRow['Room Type'] || \n  ''\n).toString().trim();\n\nconst price = (\n  matchedRow['Price'] || \n  matchedRow['Price '] || \n  ''\n).toString().trim();\n\nreturn [{\n  json: {\n    guestName,\n    guestEmail,\n    roomType,\n    price,\n    isYes,\n    sessionId\n  }\n}];"
+      },
+      "id": "2740dc3c-533e-4a99-b244-12b4976ea106",
+      "name": "Find Matching Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are the AI Front-Desk Assistant for a premium hotel.\n\nGOALS:\n- Greet guests warmly and professionally.\n- Detect the guest's language automatically and always reply in that same language.\n- Determine whether the guest wants to (a) check room availability or (b) book a room.\n\nWORKFLOW:\n1. Greet the guest and ask if they'd like to check availability or book a room.\n\n2. CHECKING AVAILABILITY:\n   - ALWAYS call the \"Check Availability\" tool fresh at the moment the guest asks.\n   - Never use cached or previously seen data — always fetch live from the sheet.\n   - Treat Availability as available if value is \"yes\", \"Yes\", \"YES\", \"y\", or \"Y\" (case-insensitive).\n   - Treat Availability as unavailable if value is \"no\", \"No\", \"NO\", \"n\", or \"N\" (case-insensitive).\n   - Only display rooms where Availability is available (case-insensitive match).\n   - Present as a clean bulleted list: Standard Room and Price only.\n\n3. BOOKING A ROOM:\n   - Before confirming any booking, call \"Check Availability\" again to get the current live state of the sheet.\n   - Find the EXACT row where Standard Room column matches the guest's chosen room AND Availability is available (case-insensitive).\n   - If that room now shows Availability as unavailable (case-insensitive), tell the guest it's no longer available and show the updated list.\n   - Collect Full Name and Email Address from the guest.\n   - Once you have both, call \"Update Booking\" targeting the SPECIFIC ROW matched by exact Standard Room value AND available Availability (case-insensitive) — set Availability to \"No\" and write the guest's Full Name and Email into that exact row only.\n   - Confirm the reservation back to the guest including the exact Standard Room and price from the sheet.\n\n4. After confirming, ask the guest to upload a screenshot of their payment receipt and let them know you'll verify it shortly.\n\nRULES:\n- NEVER show or mention rooms where Availability is unavailable (case-insensitive) — at any point.\n- NEVER invent or assume room types, prices, or availability — only use live data from the tool.\n- NEVER update a row without matching the exact Standard Room value the guest chose AND confirming its Availability is available (case-insensitive).\n- NEVER update more than one row per booking.\n- Always re-fetch availability before booking to catch real-time changes.\n- If anything is ambiguous, ask a clarifying question.\n- Keep responses concise and warm, like real hotel staff."
+        }
+      },
+      "id": "be6c3dc9-ddbe-4d7e-9092-59ea583a4d6c",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -544,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Updates a SPECIFIC ROW in the hotel room sheet after a booking is confirmed. The sheet column for room identifier is called EXACTLY 'Standard Room'. Match the target row by the exact 'Standard Room' value the guest selected (e.g. 'a', 'b', 'c') AND where Availability is currently Yes — treat 'yes', 'Yes', 'YES', 'y', 'Y' all as available (case-insensitive match). Sets Availability to 'No' and writes the guest's Full Name into 'Guest Name' and email into 'Guest Email' into that exact matched row only — do NOT update any other row under any circumstance. Only call this tool after: (1) re-fetching live availability, (2) confirming the chosen room is still available, (3) collecting guest's Full Name and Email, and (4) guest has verbally confirmed their chosen room.",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE",
+          "mode": "list",
+          "cachedResultName": "hotel rooms",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Standard Room": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Standard_Room', ``, 'string') }}",
+            "Availability": "=No",
+            "Price": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Price', ``, 'string') }}",
+            "Guest Name": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Guest_Name', ``, 'string') }}",
+            "Guest Email": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Guest_Email', ``, 'string') }}",
+            "session id": "={{ $('Chat Trigger').first().json.sessionId }}",
+            "Booked At": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "Standard Room"
+          ],
+          "schema": [
+            {
+              "id": "Standard Room",
+              "displayName": "Standard Room",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Availability",
+              "displayName": "Availability",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "Price",
+              "displayName": "Price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Guest Name",
+              "displayName": "Guest Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Guest Email",
+              "displayName": "Guest Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "session id",
+              "displayName": "session id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Booked At",
+              "displayName": "Booked At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "2c983760-d0d5-4614-a791-90d770fb059d",
+      "name": "Update Booking",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.5,
+      "position": [
+        -416,
+        1040
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "LT8pCOLrLw5wDRFL",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Fetches the LIVE hotel room sheet. The sheet has these EXACT column names: 'Standard Room', 'Availability', 'Price', 'Guest Name', 'Guest Email', 'Booked At', 'session id'. Call this tool FRESH every time a guest asks about availability OR right before processing any booking — never rely on previously fetched data. Filter and return ONLY rows where Availability = Yes — treat 'yes', 'Yes', 'YES', 'y', 'Y' all as available (case-insensitive match). If no rooms are available, return an empty result.",
+        "documentId": {
+          "__rl": true,
+          "value": "17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE",
+          "mode": "list",
+          "cachedResultName": "hotel rooms",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "64653672-6287-49c7-b4f6-fa20f4ca74f4",
+      "name": "Check Availability",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.5,
+      "position": [
+        -288,
+        1040
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "LT8pCOLrLw5wDRFL",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "id": "7858f556-7de7-41dc-b03d-08583a270889",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        -544,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE",
+          "mode": "list",
+          "cachedResultName": "hotel rooms",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "a9c4e5cc-13a1-4eaa-9ee9-4afb93ad8d05",
+      "name": "Lookup Booked Room Price",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -80,
+        512
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "LT8pCOLrLw5wDRFL",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get image data\nlet imageData = {};\ntry {\n  imageData = $('Convert Image to Base').first().json;\n} catch(e) {\n  try {\n    imageData = $('Convert Image to Base').first().json;\n  } catch(e2) {\n    imageData = {};\n  }\n}\n// Get binary image — try both node names\nlet receiptBinary = null;\ntry {\n  const b = $('Convert Image to Base').first().binary;\n  if (b && b.data0) receiptBinary = b.data0;\n} catch(e) {\n  try {\n    const b = $('Convert Image to Base').first().binary;\n    if (b && b.data0) receiptBinary = b.data0;\n  } catch(e2) {\n    receiptBinary = null;\n  }\n}\n// Get the current guest's Session ID from Chat Trigger\nlet sessionId = '';\ntry {\n  sessionId = $('Chat Trigger').first().json.sessionId || '';\n} catch(e) {\n  sessionId = '';\n}\n// Get ALL sheet rows\nconst sheetRows = $input.all();\nlet expectedPrice = '0';\nlet guestName = '';\nlet guestEmail = '';\nlet roomType = '';\nlet foundBySession = false;\n\n// FIRST: Try to match by Session ID — if multiple rows match, pick the most recent one\nif (sessionId) {\n  let sessionMatches = [];\n\n  for (const row of sheetRows) {\n    const rowSession = (row.json['Session ID'] || '').toString().trim();\n    if (rowSession === sessionId) {\n      sessionMatches.push(row);\n    }\n  }\n\n  if (sessionMatches.length > 0) {\n    let latestRow = sessionMatches[0];\n    let latestTime = latestRow.json['Booked At'] ? new Date(latestRow.json['Booked At']).getTime() : 0;\n\n    for (const row of sessionMatches) {\n      const t = row.json['Booked At'] ? new Date(row.json['Booked At']).getTime() : 0;\n      if (t > latestTime) {\n        latestTime = t;\n        latestRow = row;\n      }\n    }\n\n    const price = (latestRow.json['Price'] || latestRow.json['Price '] || '').toString().trim();\n    const cleaned = price.replace(/[^0-9.]/g, '');\n    if (cleaned) {\n      expectedPrice = cleaned;\n      guestName = (latestRow.json['Guest Name'] || latestRow.json['Guest Name '] || '').toString().trim();\n      guestEmail = (latestRow.json['Guest Email'] || '').toString().trim();\n      roomType = (latestRow.json['Standard Room'] || latestRow.json['Room Type'] || '').toString().trim();\n      foundBySession = true;\n    }\n  }\n}\n\n// FALLBACK: latest Booked At timestamp\nif (!foundBySession) {\n  let latestTime = 0;\n  for (const row of sheetRows) {\n    const availability = (row.json['Availability'] || row.json['Availability '] || '').toString().trim().toLowerCase();\n    const hasGuest = (row.json['Guest Email'] || '').toString().trim() !== '';\n    const price = (row.json['Price'] || row.json['Price '] || '').toString().trim();\n    const bookedAtRaw = row.json['Booked At'] || '';\n    const bookedAt = bookedAtRaw ? new Date(bookedAtRaw).getTime() : 0;\n    if (availability === 'no' && hasGuest && bookedAt > latestTime) {\n      latestTime = bookedAt;\n      const cleaned = price.replace(/[^0-9.]/g, '');\n      if (cleaned) {\n        expectedPrice = cleaned;\n        guestName = (row.json['Guest Name'] || row.json['Guest Name '] || '').toString().trim();\n        guestEmail = (row.json['Guest Email'] || '').toString().trim();\n        roomType = (row.json['Standard Room'] || row.json['Room Type'] || '').toString().trim();\n      }\n    }\n  }\n}\n\n// FINAL SAFETY CHECK\nif (!expectedPrice || expectedPrice === '0') {\n  throw new Error('Could not find expected price for this session. Session ID: ' + sessionId);\n}\n\nconst outputItem = {\n  json: {\n    ...imageData,\n    expectedPrice,\n    sessionId,\n    guestName,\n    guestEmail,\n    roomType,\n    foundBySession\n  }\n};\n\n// ALWAYS attach binary so email nodes never fail\nif (receiptBinary) {\n  outputItem.binary = { data0: receiptBinary };\n}\n\nreturn [outputItem];"
+      },
+      "id": "ade074a0-5733-4d25-9639-b7ab4ba17e06",
+      "name": "Extract Price from Sheet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "masoodanwar2018@gmail.com",
+        "subject": "=⚠️ SUSPICIOUS RECEIPT - {{ $('Parse Vision Response').item.json.guestName }} - {{ $('Parse Vision Response').item.json.roomType }} - Expected €{{ $('Parse Vision Response').item.json.expectedPrice }} but got €{{ $('Parse Vision Response').item.json.extracted_amount }}",
+        "message": "=<h2>⚠️ Suspicious Receipt - Manual Review Needed</h2><p><b>Amount mismatch detected by AI.</b></p><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\"><tr><td><b>Guest Name</b></td><td>{{ $('Parse Vision Response').item.json.guestName }}</td></tr><tr><td><b>Guest Email</b></td><td>{{ $('Parse Vision Response').item.json.guestEmail }}</td></tr><tr><td><b>Room Type</b></td><td>{{ $('Parse Vision Response').item.json.roomType }}</td></tr><tr><td><b>Expected Amount</b></td><td>€{{ $('Parse Vision Response').item.json.expectedPrice }}</td></tr><tr><td><b>Amount in Receipt</b></td><td>{{ $('Parse Vision Response').item.json.extracted_amount }}</td></tr><tr><td><b>AI Reason</b></td><td>{{ $('Parse Vision Response').item.json.reason }}</td></tr><tr><td><b>Session ID</b></td><td>{{ $('Parse Vision Response').item.json.sessionId }}</td></tr></table><br/><p>📎 <b>Suspicious receipt image is attached.</b></p><p>Please investigate and take appropriate action.</p>",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "data0"
+              }
+            ]
+          }
+        }
+      },
+      "id": "f7e33ff4-ca33-4178-b0bb-3c56151f9fc0",
+      "name": "Send Suspicious Receipt Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1264,
+        608
+      ],
+      "webhookId": "ff8379ef-4a4f-4b55-9c13-0e429c944563",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQOti1c8CmrxuLoe",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "masoodanwar2018@gmail.com",
+        "subject": "==✅ VERIFY PAYMENT - {{ $json.guestName }} - {{ $json.roomType }} - Session ID: {{ $json.sessionId }}",
+        "message": "=<h2>🏨 Hotel Payment Verification Required</h2><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\"><tr><td><b>Guest Name</b></td><td>{{ $json.guestName }}</td></tr><tr><td><b>Guest Email</b></td><td>{{ $json.guestEmail }}</td></tr><tr><td><b>Room Type</b></td><td>{{ $json.roomType }}</td></tr><tr><td><b>Expected Amount</b></td><td>€{{ $json.expectedPrice }}</td></tr><tr><td><b>Amount in Receipt</b></td><td>{{ $json.extracted_amount }}</td></tr><tr><td><b>Session ID</b></td><td>{{ $json.sessionId }}</td></tr><tr><td><b>AI Verdict</b></td><td>✅ Receipt looks valid | Amount matches exactly</td></tr></table><br/><p>📎 <b>Receipt image is attached below.</b></p><p>Please check your bank account and reply to this email:</p><ul><li>Reply <b>YES</b> → Payment confirmed ✅</li><li>Reply <b>NO</b> → Payment not found ❌</li></ul><p><i>Please reply within 24 hours.</i></p>",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "={{ $json.binaryKeyName || 'data0' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "6e255c42-7670-4a92-af04-c6a1cf25061f",
+      "name": "Send Receipt Email to Hotel",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1264,
+        416
+      ],
+      "webhookId": "96617b95-4570-499f-b65b-86d1772b1d9b",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQOti1c8CmrxuLoe",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailBody = ($input.item.json.text || $input.item.json.snippet || '').toString().toUpperCase().trim();\nconst subject = ($input.item.json.Subject || $input.item.json.subject || '').toString();\n\n// Extract Session ID from subject — matches long UUID format\nconst sessionMatch = \n  subject.match(/Session ID[:\\s]+([a-f0-9]{8,})/i) ||\n  subject.match(/SESSION[:\\s]+([a-f0-9]{8,})/i) ||\n  subject.match(/([a-f0-9]{20,})/i);\n\nconst sessionId = sessionMatch ? sessionMatch[1].trim() : '';\n\nconst isYes = emailBody.startsWith('YES') || emailBody.includes('\\nYES') || emailBody.includes('YES\\n');\nconst isNo = emailBody.startsWith('NO') || emailBody.includes('\\nNO') || emailBody.includes('NO\\n');\n\nreturn [{\n  json: {\n    isYes,\n    isNo,\n    sessionId,\n    emailBody,\n    subject\n  }\n}];"
+      },
+      "id": "03b20932-4304-411f-9f7e-b7d70ed7dec0",
+      "name": "Parse Your YES or NO Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "sender": "masoodanwar2018@gmail.com"
+        }
+      },
+      "id": "69f9d8cc-8a97-4760-a24f-89d8128267c2",
+      "name": "Gmail Trigger - Watch Your Reply",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        96
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQOti1c8CmrxuLoe",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE",
+          "mode": "list",
+          "cachedResultName": "hotel rooms",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17i0KQI-k8nMonjT9Vcdj1LM3RMHQ7vhlA8yAlBzCULE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "35552ed0-df9b-478e-9dea-443af399e976",
+      "name": "Lookup Guest Email",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -672,
+        96
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "LT8pCOLrLw5wDRFL",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond_yes",
+              "leftValue": "={{ $json.isYes }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "169986f1-2d7c-4447-afd5-68d770674f70",
+      "name": "Is Reply YES?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.guestEmail }}",
+        "subject": "=⚠️ Payment Verification Issue - Action Required",
+        "message": "=<h2>⚠️ Payment Verification Issue</h2><p>Dear {{ $json.guestName }},</p><p>Unfortunately, our team could not find your payment in our bank account.</p><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\"><tr><td><b>Room Type</b></td><td>{{ $json.roomType }}</td></tr><tr><td><b>Expected Amount</b></td><td>{{ $json.price }}</td></tr><tr><td><b>Status</b></td><td>❌ <b>Payment Not Found</b></td></tr></table><br/><p><b>Next Steps:</b></p><ul><li>Please double-check your bank transfer details</li><li>Re-upload your payment receipt through our chat system</li><li>Or contact our support team directly at masoodanwar2018@gmail.com</li></ul><p>We apologize for the inconvenience and are here to help resolve this quickly.</p><p><i>Best regards,<br/>Hotel Management Team</i></p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "82102872-c639-4326-9dcc-e61f460fda3d",
+      "name": "Send Rejection Email to Guest",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        192
+      ],
+      "webhookId": "49b18a11-682e-4df6-a1e2-3814b169e47a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQOti1c8CmrxuLoe",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.guestEmail }}",
+        "subject": "=✅ Payment Confirmed - Your Booking is Complete!",
+        "message": "=<h2>✅ Payment Verified Successfully!</h2><p>Dear {{ $json.guestName }},</p><p>Great news! Your payment has been manually verified by our team.</p><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\"><tr><td><b>Room Type</b></td><td>{{ $json.roomType }}</td></tr><tr><td><b>Amount Paid</b></td><td>{{ $json.price }}</td></tr><tr><td><b>Booking Status</b></td><td>✅ <b>CONFIRMED</b></td></tr></table><br/><p>Your booking is fully confirmed. We look forward to welcoming you to our hotel! 🏨</p><p>If you have any questions, please don't hesitate to contact us.</p><p><i>Best regards,<br/>Hotel Management Team</i></p>",
+        "options": {}
+      },
+      "id": "dad86e2d-08b2-45de-a70f-7b3ce171cbe1",
+      "name": "Send Confirmation Email to Guest",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "509086b6-dd07-4e49-8e97-ab5a9b6956dc",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQOti1c8CmrxuLoe",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "data0",
+        "destinationKey": "imageBase64",
+        "options": {
+          "keepSource": "json"
+        }
+      },
+      "id": "53193b68-8ee8-4d24-a095-ad93f78231bf",
+      "name": "Convert Image to Base",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -480,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "set_waiting_msg",
+              "name": "output",
+              "type": "string",
+              "value": "⏳ Thank you for uploading your receipt! Your payment amount matches. We have sent it to our team for final verification. You will receive a confirmation email shortly (within 24 hours). Thank you for your patience!"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ccb7ba6b-55e6-435a-9ac1-e224b617d27f",
+      "name": "Tell Guest We Are Checking",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1488,
+        416
+      ]
+    }
+  ],
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Has Receipt Image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Receipt Image?": {
+      "main": [
+        [
+          {
+            "node": "Convert Image to Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Image Format": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Parse Vision Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Vision Response": {
+      "main": [
+        [
+          {
+            "node": "Payment Verified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payment Verified?": {
+      "main": [
+        [
+          {
+            "node": "Send Receipt Email to Hotel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Suspicious Receipt Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Matching Session": {
+      "main": [
+        [
+          {
+            "node": "Is Reply YES?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Booking": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Booked Room Price": {
+      "main": [
+        [
+          {
+            "node": "Extract Price from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Price from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Detect Image Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Suspicious Receipt Email": {
+      "main": [
+        [
+          {
+            "node": "Not Verified Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Receipt Email to Hotel": {
+      "main": [
+        [
+          {
+            "node": "Tell Guest We Are Checking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Your YES or NO Reply": {
+      "main": [
+        [
+          {
+            "node": "Lookup Guest Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Trigger - Watch Your Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse Your YES or NO Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Guest Email": {
+      "main": [
+        [
+          {
+            "node": "Find Matching Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Reply YES?": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation Email to Guest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Rejection Email to Guest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Image to Base": {
+      "main": [
+        [
+          {
+            "node": "Lookup Booked Room Price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "20f2f947842f889fcf5ec49e5459dc8c34c9c06afb75690d3f61f3defa5e9426"
+  }
+}
