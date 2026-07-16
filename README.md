@@ -1,113 +1,101 @@
-🏨 AI Hotel Front-Desk & Payment Verification Bot — n8n Workflow
+# 🎨 AI Social Content Automation Bot — n8n Workflow
 
-An AI-powered hotel front-desk assistant built with n8n. Guests chat to check room availability and book rooms live via Google Sheets, upload a payment receipt for AI-powered verification via Groq's vision model, and a human operator gives final YES/NO approval by replying to an email — which then triggers the guest's confirmation or rejection email automatically.
+An n8n workflow that turns a short chat prompt into a ready-to-review social media post: AI-drafted captions, a cartoon/claymation-style illustration, and a Trello card for human sign-off before anything publishes. Built for a UK children's social care organisation, but the pattern works for any brand needing AI-drafted content with a mandatory human review step.
 
 ## 🔄 Workflow Overview
 
 ```
-Chat Trigger → AI Agent (Check Availability / Update Booking) → Guest uploads receipt
+Chat Trigger → Prep Prompt ──┬── Generate Captions (Groq) → Parse Caption Response ──┐
+                              └── AI Agent (Illustration Brief) → Submit Job (Kie.ai)  │
+                                                                        ↓               │
+                                                    Capture Task ID → Wait → Check Status
                                                                         ↓
-                                                    Convert Image → Detect Format
+                                                        Image Ready? ──┬── Yes → Format Result
+                                                                        └── No → Loop Back to Wait
                                                                         ↓
-                                                    Groq Vision Model → Parse Response
-                                                                        ↓
-                                                    Payment Verified? ──┬── Match → Email Operator (Verify Payment)
-                                                                        └── Mismatch → Email Operator (Suspicious Receipt)
-                                                                        
-Gmail Trigger (watches operator reply) → Parse YES/NO → Find Guest Session
-                                                                ↓
-                                            Is Reply YES? ──┬── Yes → Confirmation Email to Guest
-                                                             └── No → Rejection Email to Guest
+                                            Merge Captions + Illustration → Trello Card → Reply to Chat
 ```
 
 ## 🧩 Nodes
 
 | Node | Type | Purpose |
 |---|---|---|
-| Chat Trigger | Chat Trigger | Starts guest conversation, accepts file uploads |
-| AI Agent | LangChain Agent (`gpt-4.1-mini`) | Handles greeting, availability, and booking logic |
-| Check Availability | Google Sheets Tool | Live read of room inventory for the AI Agent |
-| Update Booking | Google Sheets Tool | Live write — marks a room booked, matched by room + availability |
-| Window Buffer Memory | Memory (LangChain) | Keeps last 10 messages of conversation context |
-| Has Receipt Image? | IF | Branches based on whether a file was uploaded |
-| Convert Image to Base | Extract From File | Converts uploaded receipt to base64 |
-| Detect Image Format | Code (JS) | Builds a correct base64 data URL with MIME type |
-| Lookup Booked Room Price | Google Sheets | Fetches all rows to find the guest's expected price |
-| Extract Price from Sheet | Code (JS) | Matches session ID to expected price, name, email |
-| HTTP Request | HTTP Request (Groq vision) | Sends receipt image to `llama-4-scout-17b-16e-instruct` for verification |
-| Parse Vision Response | Code (JS) | Parses AI response, strict numeric match check |
-| Payment Verified? | IF | Routes matched vs mismatched receipts |
-| Send Receipt Email to Hotel | Gmail | Notifies operator to manually confirm a matched payment |
-| Send Suspicious Receipt Email | Gmail | Immediately flags a mismatched/suspicious receipt |
-| Gmail Trigger - Watch Your Reply | Gmail Trigger | Watches operator inbox for YES/NO replies |
-| Parse Your YES or NO Reply | Code (JS) | Extracts session ID and YES/NO verdict from reply |
-| Find Matching Session | Code (JS) | Matches reply back to the correct guest booking |
-| Is Reply YES? | IF | Routes confirmed vs rejected payments |
-| Send Confirmation Email to Guest | Gmail | Tells guest booking is fully confirmed |
-| Send Rejection Email to Guest | Gmail | Tells guest payment wasn't found, asks to re-upload |
+| Chat Trigger | Chat Trigger | Guest/user types a topic to kick off content generation |
+| Prep Prompt | Code (JS) | Cleans input, extracts brand name from the prompt |
+| Generate Captions (Groq) | HTTP Request (Groq) | Drafts headline, Instagram + Facebook captions, hashtags via `llama-4-scout-17b-16e-instruct` |
+| Parse Caption Response | Code (JS) | Parses AI's JSON response, with safe fallback on malformed output |
+| AI Agent - Write Illustration Brief | LangChain Agent (`gpt-4.1-mini`) | Turns the topic into a strict cartoon/claymation image-generation brief |
+| OpenAI Chat Model | LM Chat Model | Powers the illustration-brief agent |
+| Submit Illustration Job (Kie.ai) | HTTP Request | Sends the brief to Kie.ai's text-to-image API |
+| Capture Task ID | Code (JS) | Grabs the returned task ID for polling |
+| Wait for Image Generation | Wait | Pauses 10 seconds between status checks |
+| Check Illustration Status | HTTP Request | Polls Kie.ai for job completion |
+| Image Ready? | IF | Routes to formatting once done, loops back if still processing |
+| Format Illustration Result | Code (JS) | Combines captions with the final image URL |
+| Merge Captions + Illustration | Code (JS) | Passes the combined payload forward |
+| Create Trello Sign-off Card | Trello | Posts captions, hashtags, image, and illustration brief to an "Awaiting Sign-off" list |
+| Reply to Chat | Set | Confirms back to the user that a draft is ready for review |
+
+## ✅ Content Safety Rules
+
+| Rule | Enforcement |
+|---|---|
+| Illustration style | Must be cartoon/claymation only — never photorealistic humans |
+| Tone | Warm, hopeful, gentle — never dramatic or sensationalised |
+| Text overlays / logos | Not generated — added separately by the brand team |
+| Publishing | Nothing auto-publishes — every draft lands in Trello for human sign-off |
+| Sensitive content | AI flags a `sensitivity_flag` if the topic touches safeguarding or case details |
 
 ## ⚙️ Setup
 
 ### 1. Prerequisites
 - n8n (self-hosted or cloud)
 - Groq API key — console.groq.com
-- OpenAI API key (for the front-desk agent model)
-- Google Sheets OAuth2 credentials
-- Gmail OAuth2 credentials
+- OpenAI API key (for the illustration-brief agent)
+- Kie.ai API key — kie.ai
+- Trello API credentials
 
 ### 2. Import Workflow
 - Open your n8n instance
 - Go to **Workflows → Import**
-- Upload `hotel-ai-booking-workflow.json`
+- Upload `ai-content-automation-workflow.json`
 
 ### 3. Configure Credentials
 
-**Groq API Key**
-In the "HTTP Request" node, set up an HTTP Header Auth credential:
+**Groq**
+Set up an HTTP Header Auth credential for the "Generate Captions (Groq)" node:
 ```
 Authorization: Bearer YOUR_GROQ_API_KEY
 ```
 
 **OpenAI**
-Connect your OpenAI API key credential to the "OpenAI Chat Model2" node.
+Connect your OpenAI API key credential to the "OpenAI Chat Model" node.
 
-**Google Sheets**
-- Connect via OAuth2 in n8n credentials
-- Point `documentId` at your own spreadsheet with columns: `Standard Room`, `Availability`, `Price`, `Guest Name`, `Guest Email`, `Booked At`, `session id`
+**Kie.ai**
+In "Submit Illustration Job (Kie.ai)" and "Check Illustration Status," replace `YOUR_KIE_AI_API_KEY` with your real key:
+```
+Authorization: Bearer YOUR_KIE_AI_API_KEY
+```
+Recommended: convert this to a proper n8n HTTP Header Auth credential instead of a hardcoded header, so no key ever appears in the exported JSON.
 
-**Gmail**
-- Connect your Gmail account via OAuth2 (used for both the trigger and the send nodes)
-- Update `sendTo` in "Send Receipt Email to Hotel" and "Send Suspicious Receipt Email" to your own operator inbox
-- Update the `sender` filter in "Gmail Trigger - Watch Your Reply" to match that same inbox
+**Trello**
+- Connect your Trello account via OAuth2 in n8n credentials
+- Update the `listId` in "Create Trello Sign-off Card" to match your own board's list
 
-## ✅ Booking & Verification Logic
-
-| Stage | Condition | Result |
-|---|---|---|
-| Availability | Sheet value = Yes/yes/Y (case-insensitive) | Room shown to guest |
-| Availability | Sheet value = No/no/N (case-insensitive) | Room hidden from guest |
-| Receipt check | AI-extracted amount exactly matches expected price | ✅ Sent to operator for final confirmation |
-| Receipt check | AI-extracted amount differs, even slightly | ⚠️ Flagged as suspicious, operator alerted immediately |
-| Operator reply | Replies YES | ✅ Guest sent confirmation email |
-| Operator reply | Replies NO | ❌ Guest sent rejection email, asked to re-upload |
-
-## 📍 Location / Business Data
-
-Currently configured for a specific hotel's spreadsheet (real Google Sheet ID) and a real personal Gmail inbox for operator alerts. To reuse this workflow for a different property:
-- Replace the Google Sheet `documentId` with your own
-- Replace the operator email in the Gmail nodes with your own
+### 4. Activate the workflow
+Test it by typing a sample topic into the chat trigger, e.g. *"info session about faith-friendly placements for Sparks Fostering."*
 
 ## 📦 Dependencies
 
-- **Groq API** — LLaMA 4 Scout vision model for receipt verification
-- **OpenAI API** — `gpt-4.1-mini` powering the front-desk agent
-- **Google Sheets** — live room inventory and booking database
-- **Gmail** — operator alerts, guest confirmations, and reply-based approval
-- n8n built-in nodes: Chat Trigger, Google Sheets, Gmail, HTTP Request, Code, IF
+- **Groq API** — LLaMA 4 Scout for caption generation
+- **OpenAI API** — `gpt-4.1-mini` powering the illustration-brief agent
+- **Kie.ai** — text-to-image generation
+- **Trello** — human review/approval queue
+- n8n built-in nodes: Chat Trigger, Code, HTTP Request, Wait, IF, Set
 
 ## 🔐 Security Note
 
-Never commit real API keys to version control. Use n8n's built-in credentials manager for Groq, OpenAI, Google Sheets, and Gmail. This workflow's exported JSON also contains a real Gmail address and Google Sheet ID — replace both before reusing for a different business.
+Never commit real API keys to version control. This repo's copy has the Kie.ai key redacted to `YOUR_KIE_AI_API_KEY` — replace it with your own via n8n's credentials manager rather than pasting it back into the node directly.
 
 ## 📄 License
 
